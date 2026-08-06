@@ -6,6 +6,7 @@
 #include "d_except.h"
 #include <list>
 #include <fstream>
+#include <vector>
 
 using namespace std;
 
@@ -24,6 +25,13 @@ const int MaxValue = 9;
 
 int numSolutions = 0;
 
+int squareNumber(int i, int j)
+// Return the square number of cell i,j (counting from left to right,
+// top to bottom.  Note that i and j each go from 1 to BoardSize
+{
+   return SquareSize * ((i-1)/SquareSize) + (j-1)/SquareSize + 1;
+}
+
 class board
 // Stores the entire Sudoku board
 {
@@ -34,17 +42,24 @@ class board
       void print();
       bool isBlank(int, int);
       ValueType getCell(int, int);
+      void setCell(int i, int j, ValueType val);
+      void printConflicts();
       
    private:
-
-      // The following matrices go from 1 to BoardSize in each
-      // dimension, i.e., they are each (BoardSize+1) * (BoardSize+1)
-
+      // Matrices indexed from 1 to BoardSize
       matrix<ValueType> value;
+
+      // Conflict tracking matrices using Approach (2):
+      matrix<bool> rowConflicts;
+      matrix<bool> colConflicts;
+      matrix<bool> sqConflicts;
 };
 
 board::board(int sqSize)
-   : value(BoardSize+1,BoardSize+1)
+   : value(BoardSize+1, BoardSize+1),
+     rowConflicts(BoardSize+1, MaxValue+1),
+     colConflicts(BoardSize+1, MaxValue+1),
+     sqConflicts(BoardSize+1, MaxValue+1)
 // Board constructor
 {
    clear();
@@ -54,10 +69,37 @@ void board::clear()
 // Mark all possible values as legal for each board entry
 {
    for (int i = 1; i <= BoardSize; i++)
+   {
       for (int j = 1; j <= BoardSize; j++)
       {
          value[i][j] = Blank;
       }
+   }
+
+   // Reset conflict flags to false
+   for (int i = 1; i <= BoardSize; i++)
+   {
+      for (int d = 1; d <= MaxValue; d++)
+      {
+         rowConflicts[i][d] = false;
+         colConflicts[i][d] = false;
+         sqConflicts[i][d] = false;
+      }
+   }
+}
+
+void board::setCell(int i, int j, ValueType val)
+// Sets cell i,j to val and updates conflict tracking matrices
+{
+   value[i][j] = val;
+   int sq = squareNumber(i, j);
+
+   if (val != Blank)
+   {
+      rowConflicts[i][val] = true;
+      colConflicts[j][val] = true;
+      sqConflicts[sq][val] = true;
+   }
 }
 
 void board::initialize(ifstream &fin)
@@ -68,37 +110,21 @@ void board::initialize(ifstream &fin)
    clear();
    
    for (int i = 1; i <= BoardSize; i++)
+   {
       for (int j = 1; j <= BoardSize; j++)
-	    {
-	       fin >> ch;
+      {
+         fin >> ch;
 
-          // If the read char is not Blank
-	      if (ch != '.')
-             setCell(i,j,ch-'0');   // Convert char to int
-        }
-}
-
-int squareNumber(int i, int j)
-// Return the square number of cell i,j (counting from left to right,
-// top to bottom.  Note that i and j each go from 1 to BoardSize
-{
-   // Note that (int) i/SquareSize and (int) j/SquareSize are the x-y
-   // coordinates of the square that i,j is in.  
-
-   return SquareSize * ((i-1)/SquareSize) + (j-1)/SquareSize + 1;
-}
-
-ostream &operator<<(ostream &ostr, vector<int> &v)
-// Overloaded output operator for vector class.
-{
-   for (int i = 0; i < v.size(); i++)
-      ostr << v[i] << " ";
-   cout << endl;
+         // If the read char is not Blank
+         if (ch != '.')
+         {
+            setCell(i, j, ch - '0');   // Convert char to int
+         }
+      }
+   }
 }
 
 ValueType board::getCell(int i, int j)
-// Returns the value stored in a cell.  Throws an exception
-// if bad values are passed.
 {
    if (i >= 1 && i <= BoardSize && j >= 1 && j <= BoardSize)
       return value[i][j];
@@ -107,7 +133,6 @@ ValueType board::getCell(int i, int j)
 }
 
 bool board::isBlank(int i, int j)
-// Returns true if cell i,j is blank, and false otherwise.
 {
    if (i < 1 || i > BoardSize || j < 1 || j > BoardSize)
       throw rangeError("bad value in setCell");
@@ -123,19 +148,19 @@ void board::print()
       if ((i-1) % SquareSize == 0)
       {
          cout << " -";
-	 for (int j = 1; j <= BoardSize; j++)
-	    cout << "---";
+         for (int j = 1; j <= BoardSize; j++)
+            cout << "---";
          cout << "-";
-	 cout << endl;
+         cout << endl;
       }
       for (int j = 1; j <= BoardSize; j++)
       {
-	 if ((j-1) % SquareSize == 0)
-	    cout << "|";
-	 if (!isBlank(i,j))
-	    cout << " " << getCell(i,j) << " ";
-	 else
-	    cout << "   ";
+         if ((j-1) % SquareSize == 0)
+            cout << "|";
+         if (!isBlank(i,j))
+            cout << " " << getCell(i,j) << " ";
+         else
+            cout << "   ";
       }
       cout << "|";
       cout << endl;
@@ -148,11 +173,53 @@ void board::print()
    cout << endl;
 }
 
+void board::printConflicts()
+// Displays which digits are present (in conflict) for each row, column, and square
+{
+   cout << "\nCONFLICTS TABLE:" << endl;
+   
+   cout << "Rows (placed digits):" << endl;
+   for (int i = 1; i <= BoardSize; i++)
+   {
+      cout << "Row " << i << ": ";
+      for (int d = 1; d <= MaxValue; d++)
+      {
+         if (rowConflicts[i][d])
+            cout << d << " ";
+      }
+      cout << endl;
+   }
+
+   cout << "\nColumns (placed digits):" << endl;
+   for (int j = 1; j <= BoardSize; j++)
+   {
+      cout << "Col " << j << ": ";
+      for (int d = 1; d <= MaxValue; d++)
+      {
+         if (colConflicts[j][d])
+            cout << d << " ";
+      }
+      cout << endl;
+   }
+
+   cout << "\nSquares (placed digits):" << endl;
+   for (int sq = 1; sq <= BoardSize; sq++)
+   {
+      cout << "Square " << sq << ": ";
+      for (int d = 1; d <= MaxValue; d++)
+      {
+         if (sqConflicts[sq][d])
+            cout << d << " ";
+      }
+      cout << endl;
+   }
+   cout << "-----------------------\n" << endl;
+}
+
 int main()
 {
    ifstream fin;
    
-   // Read the sample grid from the file.
    string fileName = "sudoku.txt";
 
    fin.open(fileName.c_str());
@@ -168,12 +235,12 @@ int main()
 
       while (fin && fin.peek() != 'Z')
       {
-	 b1.initialize(fin);
-	 b1.print();
-	 b1.printConflicts();
+         b1.initialize(fin);
+         b1.print();
+         b1.printConflicts();
       }
    }
-   catch  (indexRangeError &ex)
+   catch (indexRangeError &ex)
    {
       cout << ex.what() << endl;
       exit(1);
