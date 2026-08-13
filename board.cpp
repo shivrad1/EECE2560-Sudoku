@@ -1,9 +1,9 @@
 //Code by Hayden Trent, Alex Viatchenko-Karpinski, Shiv Radhakrishnan.
-// Declarations and functions for project #3 (Sudoku, Part a)
-// Reads Sudoku boards from a file, prints each board and its conflict tables,
-// and reports whether each board is solved. Uses the "improved conflict counts"
-// approach: three boolean tables track which digits are already used in each
-// row, column, and 3x3 square.
+//Project #3 (Sudoku, Part b)
+// Reads Sudoku boards from a file, solves each with recursive backtracking,
+// prints the solution, and reports the number of recursive calls used.
+// Uses the "improved conflict counts" approach: three boolean tables track
+// which digits are already used in each row, column, and 3x3 square.
 
 #include <iostream>
 #include <limits.h>
@@ -28,7 +28,7 @@ const int BoardSize = SquareSize * SquareSize;   // 9: full board is 9x9
 const int MinValue = 1;    // smallest legal digit
 const int MaxValue = 9;    // largest legal digit
 
-int numSolutions = 0;      // (used later, in part b, to count solutions)
+int numSolutions = 0;      // (available for counting solutions)
 
 // Return the square number (1..9) of cell (i, j), counting squares left to
 // right, top to bottom. i and j each run from 1 to BoardSize.
@@ -45,14 +45,18 @@ class board
    public:
       board(int);                              // constructor
       void clear();                            // reset whole board to blank
-      void initialize(ifstream &fin);          // (1) load a board from file
-      void print();                            // (2) print the board
+      void initialize(ifstream &fin);          // (a1) load a board from file
+      void print();                            // (a2) print the board
       bool isBlank(int, int);                  // is cell (i,j) empty?
       ValueType getCell(int, int);             // read cell (i,j)
-      void setCell(int i, int j, ValueType val); // (3) place a digit + update conflicts
-      void printConflicts();                   // (2) print the conflict tables
-      void clearCell(int i, int j);            // (4) empty a cell + update conflicts
-      bool isSolved();                         // (5) is the board completely solved?
+      void setCell(int i, int j, ValueType val); // (a3) place a digit + update conflicts
+      void printConflicts();                   // (a2) print the conflict tables
+      void clearCell(int i, int j);            // (a4) empty a cell + update conflicts
+      bool isSolved();                         // (a5) is the board completely solved?
+      bool findBlank(int &row, int &col);      // (b1) find the next blank cell to fill
+      bool isLegal(int i, int j, ValueType val); // (b2) may val go in cell (i,j)?
+      bool solve();                            // (b3) recursive backtracking solver
+      int getRecursiveCall();                  // read the recursive-call counter
 
    private:
       // Matrices indexed from 1 to BoardSize (index 0 is unused).
@@ -64,6 +68,7 @@ class board
       matrix<bool> rowConflicts;
       matrix<bool> colConflicts;
       matrix<bool> sqConflicts;
+      int recursiveCall;            // counts calls to solve() for the current board
 };
 
 // Constructor: size all four matrices (index range 1..BoardSize, so dimension
@@ -77,9 +82,12 @@ board::board(int sqSize)
    clear();
 }
 
-// Reset the whole board: every cell blank, every conflict flag false.
+// Reset the whole board: every cell blank, every conflict flag false, and the
+// recursive-call counter back to zero. Runs at the start of every board (via
+// initialize), so each board's count starts fresh.
 void board::clear()
 {
+   recursiveCall = 0;              // reset the per-board counter, once per board
    // Blank out every cell.
    for (int i = 1; i <= BoardSize; i++)
    {
@@ -102,7 +110,7 @@ void board::clear()
    }
 }
 
-// (3) Place digit 'val' in cell (i, j) and mark it used in the row, column,
+// (a3) Place digit 'val' in cell (i, j) and mark it used in the row, column,
 // and square conflict tables. This is the inverse of clearCell.
 void board::setCell(int i, int j, ValueType val)
 {
@@ -117,9 +125,10 @@ void board::setCell(int i, int j, ValueType val)
    }
 }
 
-// (4) Empty cell (i, j) and un-mark its digit in all three conflict tables.
+// (a4) Empty cell (i, j) and un-mark its digit in all three conflict tables.
 // Inverse of setCell: read the old digit first, blank the cell, then clear
-// that digit's three flags.
+// that digit's three flags. Being an exact inverse is what lets the solver
+// undo a move and leave the tables exactly as they were before.
 void board::clearCell(int i, int j)
 {
    ValueType old = value[i][j];    // capture the current digit BEFORE erasing it
@@ -134,7 +143,7 @@ void board::clearCell(int i, int j)
    }
 }
 
-// (1) Read one Sudoku board from the input file into this object.
+// (a1) Read one Sudoku board from the input file into this object.
 // The board is given as 81 characters: digits 1-9, or '.' for a blank.
 void board::initialize(ifstream &fin)
 {
@@ -176,7 +185,7 @@ bool board::isBlank(int i, int j)
    return (getCell(i,j) == Blank);
 }
 
-// (2) Print the board as a grid, drawing separator lines between the 3x3
+// (a2) Print the board as a grid, drawing separator lines between the 3x3
 // squares. Blank cells are shown as empty space.
 void board::print()
 {
@@ -213,7 +222,7 @@ void board::print()
    cout << endl;
 }
 
-// (2) Print the conflict tables: for each row, column, and square, list which
+// (a2) Print the conflict tables: for each row, column, and square, list which
 // digits are currently placed (i.e. which conflict flags are true).
 void board::printConflicts()
 {
@@ -260,7 +269,7 @@ void board::printConflicts()
    cout << "-----------------------\n" << endl;
 }
 
-// (5) Return true if the board is completely and correctly solved, and print
+// (a5) Return true if the board is completely and correctly solved, and print
 // the result. Solved means: no blank cells, and every digit 1-9 present in
 // every row, column, and square (every conflict flag true).
 bool board::isSolved()
@@ -299,6 +308,65 @@ bool board::isSolved()
    return solved;
 }
 
+// Return the number of recursive solve() calls used on the most recent board.
+int board::getRecursiveCall() {
+   return recursiveCall;
+}
+
+// (b1) Find the next blank cell to fill. Scans in row-major order and returns
+// the first blank found, setting row/col to its location. Returns true if a
+// blank exists, or false if the board is full (which means it is solved).
+bool board::findBlank(int &row, int &col) {
+
+   for (int i = 1; i <= BoardSize; i++)
+   {
+      for (int j = 1; j <= BoardSize; j++)
+      {
+         if (isBlank(i,j)) {
+            row = i; col = j;      // hand the blank's coordinates back to the caller
+            return true;
+         }
+      }
+   }
+   return false;                   // no blank left: board is full
+}
+
+// (b2) Legality check: return true if digit 'val' may be placed in cell (i, j)
+// without conflict, i.e. it is not already used in that row, column, or square.
+// Thanks to the conflict tables this is O(1) (three flag reads) rather than a
+// scan of 27 cells.
+bool board::isLegal(int i, int j, ValueType val)
+{
+   int sq = squareNumber(i, j);
+   return !rowConflicts[i][val] && !colConflicts[j][val] && !sqConflicts[sq][val];
+}
+
+// (b3) Recursive backtracking solver. Returns true if the board can be solved
+// from its current state, false if this branch is a dead end. Every call
+// increments recursiveCall so the number of recursive iterations can be
+// reported (the metric the assignment asks us to minimize).
+bool board::solve() {
+   recursiveCall++;               // count this call (initial call and every recursion)
+   int row; int col;
+   // Base case: no blank cell left means the board is full -> solved.
+   if (!findBlank(row, col)) {
+      return true;
+   }
+   else {
+      // Try every legal digit in the chosen blank cell.
+      for (int val = MinValue; val <=MaxValue; val++ ){
+         if (isLegal(row, col, val)) {
+
+         setCell(row,col,val);          // place the digit (updates conflicts)
+         if (solve()) return true;      // recurse; success propagates straight up
+         clearCell(row, col);           // undo (backtrack) and try the next digit
+         }
+      }
+      return false;              // no digit worked: report failure so caller backtracks
+   }
+
+}
+
 int main()
 {
    ifstream fin;
@@ -313,6 +381,8 @@ int main()
       exit(1);
    }
 
+   // Totals tracked across all boards, used to report the average at the end.
+   int totalCalls = 0; int boardCount = 0;
    try
    {
       board b1(SquareSize);          // reusable board object
@@ -320,11 +390,21 @@ int main()
       // Process each board until end of file or the sentinel 'Z'.
       while (fin && fin.peek() != 'Z')
       {
-         b1.initialize(fin);         // (1) load the next board
-         b1.print();                 // (2) show the board
-         b1.printConflicts();        // (2) show the conflict tables
-         b1.isSolved();              // (5) report solved / not solved
+         b1.initialize(fin);         // (a1) load the next board (also resets counter)
+         b1.print();                 // (a2) show the board
+         b1.printConflicts();        // (a2) show the conflict tables
+         b1.isSolved();              // (a5) report solved / not solved (before solving)
+         b1.solve();                 // (b3) solve via recursive backtracking
+         b1.isSolved();              // (a5) report solved / not solved (after solving)
+         b1.print();                 // print the solved board
+         int calls = b1.getRecursiveCall();
+         cout << "Recursive calls: " << calls << endl;
+         totalCalls += calls;        // accumulate for the average
+         boardCount++;
       }
+      cout << "Total recursive calls: " << totalCalls << endl;
+      // Cast to double so the average is a real number, not truncated integer division.
+      cout << "Average recursive calls per board: " << (double)totalCalls / boardCount << endl;
    }
    catch (indexRangeError &ex)
    {
